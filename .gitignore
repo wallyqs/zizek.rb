@@ -1,0 +1,6 @@
+# Built gems. `gem build` writes them next to the gemspec, and the mirror this
+# directory is published as inherits this file rather than the monorepo's.
+*.gem
+/pkg/
+/.bundle/
+/Gemfile.lock

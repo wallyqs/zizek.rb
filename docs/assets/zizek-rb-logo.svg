@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-70 -20 1040 970" width="1040" height="970" role="img" aria-label="Zizek.rb">
+  <title>Zizek.rb</title>
+  <!-- shrinking counterexample: each pass narrows the failing input until only
+       the minimal reproducer (the accent square) is left -->
+  <g>
+    <rect x="125" y="40"  width="475" height="110" fill="#17224e"/>
+    <rect x="243" y="160" width="357" height="105" fill="#0f47b4"/>
+    <rect x="363" y="273" width="230" height="94"  fill="#2277e0"/>
+    <rect x="460" y="375" width="173" height="73"  fill="#5b9cf0"/>
+    <rect x="545" y="455" width="130" height="65"  fill="#7fb2f5"/>
+    <rect x="670" y="525" width="45"  height="43"  fill="#cc0f2b"/>
+  </g>
+  <text x="450" y="880" fill="#17224e" text-anchor="middle"
+        font-family="'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', sans-serif"
+        font-size="265" font-weight="600" letter-spacing="-5">&#381;i&#382;ek<tspan fill="#cc0f2b">.rb</tspan></text>
+</svg>
