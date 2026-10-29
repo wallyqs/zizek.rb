@@ -1635,6 +1635,12 @@ module Zizek
 
           next
         end
+        order = string_draws_compare(candidate_draw, current_draw)
+        unless order.nil?
+          return order unless order.zero?
+
+          next
+        end
         candidate_index = draw_sort_index(candidate_draw)
         current_index = draw_sort_index(current_draw)
         return 1 if candidate_index.nil? || current_index.nil?
@@ -1643,6 +1649,22 @@ module Zizek
         return order unless order.zero?
       end
       0
+    end
+
+    # Order two string draws of one alphabet and minimum size by index, nil
+    # for any other pair. The core compares them without building either
+    # index; a long string's index is too costly to build for every shrink
+    # candidate.
+    def string_draws_compare(candidate, current)
+      return nil unless candidate.kind == :string && current.kind == :string
+
+      characters, minimum, = candidate.params
+      return nil unless current.params[0] == characters && current.params[1] == minimum
+
+      Core.string_index_compare(
+        characters, minimum,
+        Shell.pack_codepoints(candidate.value), Shell.pack_codepoints(current.value)
+      )
     end
 
     # Rebuild a draw at a schedule index, or report a miss.
@@ -1722,43 +1744,22 @@ module Zizek
       Core.choice_list_header(draws.length) + draws.map { |draw| Shell.entry(draw) }.join
     end
 
-    class ChoiceTree
+    # Every choice stream a run has executed, so a mutation that would only
+    # repeat one is skipped. Membership is of whole streams, never of
+    # prefixes: a trie with a node per byte answered the same questions while
+    # holding megabytes for each long example until the run ended. Streams are
+    # keyed as binary strings, so equal bytes are equal keys.
+    class StreamSet
       def initialize
-        @terminal = false
-        @children = {}
+        @streams = {}
       end
 
-      def include?(path)
-        node = self
-        path.each_byte do |byte|
-          node = node.child(byte)
-          return false if node.nil?
-        end
-        node.terminal?
+      def include?(stream)
+        @streams.key?(stream.b)
       end
 
-      def insert(path)
-        node = self
-        path.each_byte { |byte| node = node.child_or_insert(byte) }
-        node.mark_terminal
-      end
-
-      protected
-
-      def child(byte)
-        @children[byte]
-      end
-
-      def child_or_insert(byte)
-        @children[byte] ||= ChoiceTree.new
-      end
-
-      def terminal?
-        @terminal
-      end
-
-      def mark_terminal
-        @terminal = true
+      def insert(stream)
+        @streams[stream.b] = true
       end
     end
 
@@ -2593,7 +2594,7 @@ module Zizek
     # Consecutive executed mutation requests; the schedule caps it at one
     # brood so fresh random generation keeps its share of the run.
     mutation_streak = 0
-    choice_tree = Shell::ChoiceTree.new
+    seen_streams = Shell::StreamSet.new
     # Per-label best score and the stream that produced it, for the targeting
     # hill climber. The schedule, budgets, record and accept rules, stepping,
     # and the step-size search are all compiled (ir/targeting.zir); this loop
@@ -2655,7 +2656,7 @@ module Zizek
       else
         attempts += 1
         error, trial_case = Shell.execute(property, rng: rng, replay: stream)
-        choice_tree.insert(trial_case.__send__(:serialized))
+        seen_streams.insert(trial_case.__send__(:serialized))
         if error.nil?
           valid += 1
           record_targets.call(trial_case)
@@ -2811,9 +2812,9 @@ module Zizek
       simplest_probe = request == 1
       mutation_probe = request == 2
       mutation = mutation_probe ? pending_mutations.shift : nil
-      novelty = Core.generation_novelty_action(request, mutation_probe && choice_tree.include?(mutation))
+      novelty = Core.generation_novelty_action(request, mutation_probe && seen_streams.include?(mutation))
       next if novelty.zero?
-      choice_tree.insert(mutation) if novelty == 2
+      seen_streams.insert(mutation) if novelty == 2
       attempts += 1
       mutation_streak = mutation_probe ? mutation_streak + 1 : 0
       error, test_case = Shell.execute(
@@ -2822,7 +2823,7 @@ module Zizek
         replay: mutation,
         simplest: simplest_probe
       )
-      choice_tree.insert(test_case.__send__(:serialized))
+      seen_streams.insert(test_case.__send__(:serialized))
       generation_us = [((1 << 64) - 1), generation_us + test_case.__send__(:generation_us)].min
       outcome = Shell.classify(error)
       if Core.health_large_base_example(

@@ -5,6 +5,17 @@ All notable changes to the Ruby package are recorded here. The format follows
 [semantic versioning](https://semver.org/spec/v2.0.0.html) — while the version
 is `0.x`, the API may change in any release.
 
+## [0.1.2] - 2026-10-28
+
+### Fixed
+
+- Shrinking a long byte-string or text draw no longer stalls. Converting a
+  draw to and from its shortlex index took time roughly cubic in its length, so
+  a draw of about 1 KB could keep a shrink running for minutes; byte indexes are
+  now built and decoded in one linear pass, text indexes without full bigint
+  products, and two text draws compare without building either index. Shrunk
+  results and reproduce blobs are unchanged.
+
 ## [0.1.1] - 2026-10-27
 
 First release of the Ruby package.

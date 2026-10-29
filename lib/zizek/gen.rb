@@ -866,6 +866,133 @@ module Zizek
       return result
     end
 
+    def positive_mul_add_small_le(value_raw, factor, addend)
+      value = signed_abs_le(value_raw)
+      n = value.bytesize
+      i0 = 0
+      i1 = 1
+      u0 = 0
+      u8 = 8
+      u255 = 255
+      out = String.new(encoding: Encoding::BINARY)
+      carry = addend
+      pos = i0
+      loop do
+        done = (pos >= n)
+        if done
+          break
+        end
+        byte_ = value.getbyte(pos)
+        scaled = ((byte_ * factor) & MASK)
+        sum = ((scaled + carry) & MASK)
+        out_byte = (sum & u255)
+        out << (out_byte & 0xff)
+        carry = (sum >> u8)
+        pos = (pos + i1)
+      end
+      loop do
+        drained = (carry == u0)
+        if drained
+          break
+        end
+        carry_byte = (carry & u255)
+        out << (carry_byte & 0xff)
+        carry = (carry >> u8)
+      end
+      out << (u0 & 0xff)
+      canonical = canonicalize_signed_le(out)
+      return canonical
+    end
+
+    def small_quotient_digit(current, divisor)
+      u0 = 0
+      u1 = 1
+      u8 = 8
+      digit = u0
+      rest = current
+      bit = u8
+      loop do
+        done = (bit == u0)
+        if done
+          break
+        end
+        bit = ((bit - u1) & MASK)
+        step = ((divisor << bit) & MASK)
+        fits = (rest >= step)
+        if fits
+          rest = ((rest - step) & MASK)
+          place = ((u1 << bit) & MASK)
+          digit = (digit | place)
+        end
+      end
+      return digit
+    end
+
+    def positive_div_small_le(value_raw, divisor)
+      value = signed_abs_le(value_raw)
+      n = value.bytesize
+      i0 = 0
+      i1 = 1
+      u0 = 0
+      u8 = 8
+      high_first = String.new(encoding: Encoding::BINARY)
+      remainder = u0
+      pos = n
+      loop do
+        done = (pos == i0)
+        if done
+          break
+        end
+        pos = (pos - i1)
+        byte_ = value.getbyte(pos)
+        shifted = ((remainder << u8) & MASK)
+        current = ((shifted + byte_) & MASK)
+        digit = small_quotient_digit(current, divisor)
+        high_first << (digit & 0xff)
+        taken = ((digit * divisor) & MASK)
+        remainder = ((current - taken) & MASK)
+      end
+      out = String.new(encoding: Encoding::BINARY)
+      pos = n
+      loop do
+        done = (pos == i0)
+        if done
+          break
+        end
+        pos = (pos - i1)
+        byte_ = high_first.getbyte(pos)
+        out << (byte_ & 0xff)
+      end
+      out << (u0 & 0xff)
+      canonical = canonicalize_signed_le(out)
+      return canonical
+    end
+
+    def positive_rem_small_le(value_raw, divisor)
+      value = signed_abs_le(value_raw)
+      n = value.bytesize
+      i0 = 0
+      i1 = 1
+      u0 = 0
+      u8 = 8
+      remainder = u0
+      pos = n
+      loop do
+        done = (pos == i0)
+        if done
+          break
+        end
+        pos = (pos - i1)
+        byte_ = value.getbyte(pos)
+        shifted = ((remainder << u8) & MASK)
+        current = ((shifted + byte_) & MASK)
+        digit = small_quotient_digit(current, divisor)
+        taken = ((digit * divisor) & MASK)
+        remainder = ((current - taken) & MASK)
+      end
+      return remainder
+    end
+
     def signed_compare_le(left_raw, right_raw)
       left = canonicalize_signed_le(left_raw)
       right = canonicalize_signed_le(right_raw)
@@ -1372,34 +1499,35 @@ module Zizek
     def bytes_to_index(min_size, value)
       i0 = 0
       i1 = 1
-      base = bigint_base_256()
-      offset = bigint_zero()
-      length = min_size
+      u0 = 0
+      u1 = 1
+      u8 = 8
+      u255 = 255
       value_length = value.bytesize
-      loop do
-        done = (length >= value_length)
-        if done
-          break
-        end
-        exponent = (length & MASK)
-        bucket = positive_pow_le(base, exponent)
-        offset = signed_add_le(offset, bucket)
-        length = (length + i1)
-      end
-      position = bigint_zero()
+      last = (value_length - i1)
+      out = String.new(encoding: Encoding::BINARY)
+      carry = u0
       pos = i0
       loop do
         done = (pos >= value_length)
         if done
           break
         end
-        byte_ = value.getbyte(pos)
-        digit = positive_u8_le(byte_)
-        shifted = signed_mul_le(position, base)
-        position = signed_add_le(shifted, digit)
+        mirror = (last - pos)
+        digit = value.getbyte(mirror)
+        sum = ((digit + carry) & MASK)
+        in_offset = (pos >= min_size)
+        if in_offset
+          sum = ((sum + u1) & MASK)
+        end
+        out_byte = (sum & u255)
+        out << (out_byte & 0xff)
+        carry = (sum >> u8)
         pos = (pos + i1)
       end
-      index = signed_add_le(offset, position)
+      out << (carry & 0xff)
+      out << (u0 & 0xff)
+      index = canonicalize_signed_le(out)
       return index
     end
 
@@ -1424,49 +1552,99 @@ module Zizek
     def bytes_from_index(min_size, max_size, index_raw)
       i0 = 0
       i1 = 1
-      base = bigint_base_256()
-      remaining = signed_abs_le(index_raw)
-      length = min_size
+      u0 = 0
+      u1 = 1
+      u8 = 8
+      u255 = 255
+      u256 = 256
+      index = signed_abs_le(index_raw)
+      index_n = index.bytesize
+      significant = index_n
       loop do
-        past_end = (length > max_size)
-        if past_end
+        none_left = (significant == i0)
+        if none_left
           break
         end
-        exponent = (length & MASK)
-        bucket = positive_pow_le(base, exponent)
-        bucket_cmp = signed_compare_le(remaining, bucket)
-        inside_bucket = (bucket_cmp < i0)
-        if inside_bucket
-          out = String.new(encoding: Encoding::BINARY)
-          empty = (length == i0)
-          if empty
-            some_empty = out.dup
-            return some_empty
-          end
-          power = (length - i1)
-          power_u64 = (power & MASK)
-          divisor = positive_pow_le(base, power_u64)
-          pos = i0
-          loop do
-            done = (pos >= length)
-            if done
-              break
-            end
-            digit = positive_div_le_nonzero(remaining, divisor)
-            byte_ = digit.getbyte(i0)
-            out << (byte_ & 0xff)
-            remaining = positive_rem_le_nonzero(remaining, divisor)
-            divisor = positive_div_le_nonzero(divisor, base)
-            pos = (pos + i1)
-          end
-          some = out.dup
-          return some
+        top_pos = (significant - i1)
+        top = index.getbyte(top_pos)
+        top_set = (top != u0)
+        if top_set
+          break
         end
-        remaining = signed_sub_le(remaining, bucket)
-        length = (length + i1)
+        significant = top_pos
       end
-      none = nil
-      return none
+      length = min_size
+      past_min = (significant > min_size)
+      if past_min
+        length = significant
+        pos = significant
+        loop do
+          done = (pos == i0)
+          if done
+            break
+          end
+          pos = (pos - i1)
+          index_byte = index.getbyte(pos)
+          offset_byte = u0
+          in_offset = (pos >= min_size)
+          if in_offset
+            offset_byte = u1
+          end
+          below = (index_byte < offset_byte)
+          if below
+            length = (significant - i1)
+            break
+          end
+          above = (index_byte > offset_byte)
+          if above
+            break
+          end
+        end
+      end
+      past_end = (length > max_size)
+      if past_end
+        none = nil
+        return none
+      end
+      low_first = String.new(encoding: Encoding::BINARY)
+      borrow = u0
+      pos = i0
+      loop do
+        done = (pos >= length)
+        if done
+          break
+        end
+        index_byte = u0
+        present = (pos < index_n)
+        if present
+          index_byte = index.getbyte(pos)
+        end
+        subtrahend = borrow
+        in_offset = (pos >= min_size)
+        if in_offset
+          subtrahend = ((subtrahend + u1) & MASK)
+        end
+        lifted = ((index_byte + u256) & MASK)
+        difference = ((lifted - subtrahend) & MASK)
+        out_byte = (difference & u255)
+        low_first << (out_byte & 0xff)
+        kept = (difference >> u8)
+        borrow = ((u1 - kept) & MASK)
+        pos = (pos + i1)
+      end
+      out = String.new(encoding: Encoding::BINARY)
+      pos = length
+      loop do
+        done = (pos == i0)
+        if done
+          break
+        end
+        pos = (pos - i1)
+        byte_ = low_first.getbyte(pos)
+        out << (byte_ & 0xff)
+      end
+      some = out.dup
+      return some
     end
 
     def f64_abs(value)
@@ -5953,9 +6131,11 @@ module Zizek
       u0 = 0
       u1 = 1
       u2 = 2
+      u4 = 4
+      u8 = 8
+      u255 = 255
       length = string_length(value)
-      best = u0
-      found = false
+      ranks = String.new(encoding: Encoding::BINARY)
       at = i0
       loop do
         done = (at >= length)
@@ -5965,9 +6145,37 @@ module Zizek
         codepoint = string_codepoint_at(value, at)
         index = alphabet_index_of(alphabet, codepoint)
         present = !index.nil?
+        stored = u0
         if present
           index_value = index
           rank = alphabet_shrink_rank(alphabet, index_value)
+          stored = ((rank + u1) & MASK)
+        end
+        stored_byte = u0
+        loop do
+          packed_all = (stored_byte == u4)
+          if packed_all
+            break
+          end
+          stored_low = (stored & u255)
+          ranks << (stored_low & 0xff)
+          stored = (stored >> u8)
+          stored_byte = ((stored_byte + u1) & MASK)
+        end
+        at = (at + i1)
+      end
+      best = u0
+      found = false
+      at = i0
+      loop do
+        done = (at >= length)
+        if done
+          break
+        end
+        stored = string_codepoint_at(ranks, at)
+        present = (stored != u0)
+        if present
+          rank = ((stored - u1) & MASK)
           lowerable = (rank != u0)
           improves = (rank > best)
           not_found = (!found)
@@ -5981,15 +6189,13 @@ module Zizek
               if counted
                 break
               end
-              other_codepoint = string_codepoint_at(value, other)
-              other_index = alphabet_index_of(alphabet, other_codepoint)
-              other_present = !other_index.nil?
-              if other_present
-                other_index_value = other_index
-                other_rank = alphabet_shrink_rank(alphabet, other_index_value)
-                same = (other_rank == rank)
-                if same
-                  seen = ((seen + u1) & MASK)
+              other_stored = string_codepoint_at(ranks, other)
+              same = (other_stored == stored)
+              if same
+                seen = ((seen + u1) & MASK)
+                twice = (seen >= u2)
+                if twice
+                  break
                 end
               end
               other = (other + i1)
@@ -6075,19 +6281,23 @@ module Zizek
         none_past = nil
         return none_past
       end
+      i4 = 4
+      whole = (length * i4)
+      drop_start = (position * i4)
+      drop_end = (drop_start + i4)
       out = String.new(encoding: Encoding::BINARY)
       at = i0
       loop do
-        done = (at >= length)
+        done = (at >= whole)
         if done
           break
         end
-        dropped = (at == position)
-        kept = (!dropped)
+        before = (at < drop_start)
+        after = (at >= drop_end)
+        kept = (before || after)
         if kept
-          codepoint = string_codepoint_at(value, at)
-          packed_ = u32_to_le(codepoint)
-          out = append_bytes(out, packed_)
+          byte_ = value.getbyte(at)
+          out << (byte_ & 0xff)
         end
         at = (at + i1)
       end
@@ -6099,20 +6309,30 @@ module Zizek
       i0 = 0
       i1 = 1
       u0 = 0
+      u1 = 1
       size = alphabet_size(alphabet)
-      base = u64_to_bigint_le(size)
       count = string_length(value)
       offset = bigint_zero()
-      length = min_size
-      loop do
-        done = (length >= count)
-        if done
-          break
+      has_offset = (count > min_size)
+      if has_offset
+        length = min_size
+        loop do
+          done = (length >= count)
+          if done
+            break
+          end
+          offset = positive_mul_add_small_le(offset, size, u1)
+          length = (length + i1)
         end
-        exponent = (length & MASK)
-        bucket = positive_pow_le(base, exponent)
-        offset = signed_add_le(offset, bucket)
-        length = (length + i1)
+        scale = i0
+        loop do
+          done = (scale >= min_size)
+          if done
+            break
+          end
+          offset = positive_mul_add_small_le(offset, size, u0)
+          scale = (scale + i1)
+        end
       end
       position = bigint_zero()
       pos = i0
@@ -6129,13 +6349,77 @@ module Zizek
           alphabet_index = found
           rank = alphabet_shrink_rank(alphabet, alphabet_index)
         end
-        digit = u64_to_bigint_le(rank)
-        shifted = signed_mul_le(position, base)
-        position = signed_add_le(shifted, digit)
+        position = positive_mul_add_small_le(position, size, rank)
         pos = (pos + i1)
       end
       index = signed_add_le(offset, position)
       return index
+    end
+
+    def string_index_compare(alphabet, min_size, left, right)
+      i0 = 0
+      i1 = 1
+      u0 = 0
+      negative_one = (i0 - i1)
+      size = alphabet_size(alphabet)
+      left_count = string_length(left)
+      right_count = string_length(right)
+      has_members = (size != u0)
+      left_sized = (left_count >= min_size)
+      right_sized = (right_count >= min_size)
+      both_sized = (left_sized && right_sized)
+      direct = (has_members && both_sized)
+      indirect = (!direct)
+      if indirect
+        left_index = string_to_index(alphabet, min_size, left)
+        right_index = string_to_index(alphabet, min_size, right)
+        order = signed_compare_le(left_index, right_index)
+        return order
+      end
+      left_shorter = (left_count < right_count)
+      if left_shorter
+        return negative_one
+      end
+      left_longer = (left_count > right_count)
+      if left_longer
+        return i1
+      end
+      pos = i0
+      loop do
+        done = (pos >= left_count)
+        if done
+          break
+        end
+        left_codepoint = string_codepoint_at(left, pos)
+        right_codepoint = string_codepoint_at(right, pos)
+        differs = (left_codepoint != right_codepoint)
+        if differs
+          left_found = alphabet_index_of(alphabet, left_codepoint)
+          left_present = !left_found.nil?
+          left_rank = u0
+          if left_present
+            left_alphabet_index = left_found
+            left_rank = alphabet_shrink_rank(alphabet, left_alphabet_index)
+          end
+          right_found = alphabet_index_of(alphabet, right_codepoint)
+          right_present = !right_found.nil?
+          right_rank = u0
+          if right_present
+            right_alphabet_index = right_found
+            right_rank = alphabet_shrink_rank(alphabet, right_alphabet_index)
+          end
+          rank_less = (left_rank < right_rank)
+          if rank_less
+            return negative_one
+          end
+          rank_greater = (left_rank > right_rank)
+          if rank_greater
+            return i1
+          end
+        end
+        pos = (pos + i1)
+      end
+      return i0
     end
 
     def string_max_index(alphabet, min_size, max_size)
@@ -6176,64 +6460,102 @@ module Zizek
     def string_from_index(alphabet, min_size, max_size, index_raw)
       i0 = 0
       i1 = 1
+      i8 = 8
       u0 = 0
+      u1 = 1
+      u2 = 2
+      u4 = 4
+      u8 = 8
+      u255 = 255
       size = alphabet_size(alphabet)
       no_members = (size == u0)
       if no_members
         none = nil
         return none
       end
-      base = u64_to_bigint_le(size)
       remaining = signed_abs_le(index_raw)
+      remaining_n = remaining.bytesize
+      remaining_bits = (remaining_n * i8)
+      narrow = (remaining_bits <= min_size)
+      several = (size >= u2)
+      first_bucket = (narrow && several)
+      bucket = bigint_one()
+      build_bucket = (!first_bucket)
+      if build_bucket
+        scale = i0
+        loop do
+          done = (scale >= min_size)
+          if done
+            break
+          end
+          bucket = positive_mul_add_small_le(bucket, size, u0)
+          scale = (scale + i1)
+        end
+      end
       length = min_size
       loop do
         past_end = (length > max_size)
         if past_end
           break
         end
-        exponent = (length & MASK)
-        bucket = positive_pow_le(base, exponent)
         bucket_cmp = signed_compare_le(remaining, bucket)
         inside_bucket = (bucket_cmp < i0)
+        inside_bucket = (inside_bucket || first_bucket)
         if inside_bucket
-          out = String.new(encoding: Encoding::BINARY)
-          empty = (length == i0)
-          if empty
-            some_empty = out.dup
-            return some_empty
-          end
-          power = (length - i1)
-          power_u64 = (power & MASK)
-          divisor = positive_pow_le(base, power_u64)
+          ranks = String.new(encoding: Encoding::BINARY)
           pos = i0
           loop do
             done = (pos >= length)
             if done
               break
             end
-            digit = positive_div_le_nonzero(remaining, divisor)
-            digit_u64 = bigint_to_u64_le(digit)
-            digit_fits = !digit_u64.nil?
-            rank = u0
-            if digit_fits
-              rank = digit_u64
+            rank = positive_rem_small_le(remaining, size)
+            rank_byte = u0
+            loop do
+              packed_all = (rank_byte == u4)
+              if packed_all
+                break
+              end
+              rank_low = (rank & u255)
+              ranks << (rank_low & 0xff)
+              rank = (rank >> u8)
+              rank_byte = ((rank_byte + u1) & MASK)
             end
+            remaining = positive_div_small_le(remaining, size)
+            pos = (pos + i1)
+          end
+          out = String.new(encoding: Encoding::BINARY)
+          pos = length
+          loop do
+            done = (pos == i0)
+            if done
+              break
+            end
+            pos = (pos - i1)
+            rank = string_codepoint_at(ranks, pos)
             found = alphabet_shrink_codepoint(alphabet, rank)
             present = !found.nil?
             codepoint = u0
             if present
               codepoint = found
             end
-            packed_ = u32_to_le(codepoint)
-            out = append_bytes(out, packed_)
-            remaining = positive_rem_le_nonzero(remaining, divisor)
-            divisor = positive_div_le_nonzero(divisor, base)
-            pos = (pos + i1)
+            codepoint_byte = u0
+            loop do
+              packed_all = (codepoint_byte == u4)
+              if packed_all
+                break
+              end
+              codepoint_low = (codepoint & u255)
+              out << (codepoint_low & 0xff)
+              codepoint = (codepoint >> u8)
+              codepoint_byte = ((codepoint_byte + u1) & MASK)
+            end
           end
           some = out.dup
           return some
         end
         remaining = signed_sub_le(remaining, bucket)
+        bucket = positive_mul_add_small_le(bucket, size, u0)
         length = (length + i1)
       end
       none = nil
